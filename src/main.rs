@@ -1,6 +1,7 @@
 use clap::{App, Arg, ArgMatches};
 use libp2p::{
-    identity::ed25519::Keypair,
+    identity::{Keypair, ed25519},
+    tcp::TcpConfig, PeerId, Multiaddr, Transport,
 };
 use log;
 use stderrlog;
@@ -19,7 +20,7 @@ const ARG_GEN: &str = "keygen";
 fn get_keypair(matches: &ArgMatches) -> Result<Keypair, Box<dyn Error>> {
     if matches.occurrences_of(ARG_GEN) > 0 {
         log::info!("Generate new key pair.");
-        let keypair = Keypair::generate();
+        let keypair = ed25519::Keypair::generate();
 
         // Write to file
         if let Some(filename) = matches.value_of(ARG_KEYPAIR) {
@@ -28,14 +29,14 @@ fn get_keypair(matches: &ArgMatches) -> Result<Keypair, Box<dyn Error>> {
             file.write_all(&keypair.encode()[..])?;
         }
 
-        Ok(keypair)
+        Ok(Keypair::Ed25519(keypair))
     } else if let Some(filename) = matches.value_of(ARG_KEYPAIR) {
         log::info!("Load key pair.");
         let mut keydata = Vec::new();
         let mut file = File::open(filename)?;
         file.read_to_end(&mut keydata)?;
 
-        Ok(Keypair::decode(&mut keydata[..])?)
+        Ok(Keypair::Ed25519(ed25519::Keypair::decode(&mut keydata[..])?))
     } else {
         let err_msg = format!(
             "Argument <{}> is required if <{}> is not set.",
@@ -85,4 +86,11 @@ fn main() {
     // Generate new key pair
     let keypair = get_keypair(&matches).unwrap();
 
+    // Create PeerID
+    let local_peer_id = PeerId::from(keypair.public());
+
+    // Create transport protocol
+    let transport = TcpConfig::new();
+    let addr: Multiaddr = "/ip6/98.97.96.95/tcp/0".parse().expect("invalid multiaddr");
+    let _conn = transport.dial(addr);
 }
