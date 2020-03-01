@@ -1,5 +1,5 @@
+#![deny(unsafe_code)]
 use async_std::{io, task};
-use clap::{App, Arg, ArgMatches};
 use futures::prelude::*;
 use libp2p::{
     floodsub::{self, Floodsub},
@@ -11,23 +11,48 @@ use std::{
     task::{Context, Poll},
 };
 use stderrlog;
+use structopt::StructOpt;
 
 mod chat;
 mod key;
 
+const NAME: &str = env!("CARGO_PKG_NAME");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHOR: &str = env!("CARGO_PKG_AUTHORS");
 const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 
-const ARG_VERBOSE: &str = "verbose";
-const ARG_KEYPAIR: &str = "keypair";
-const ARG_GEN: &str = "keygen";
-const ARG_TOPIC: &str = "topic";
-const ARG_PEER: &str = "peer";
-
 const DEFAULT_TOPIC: &str = "chat";
 
-fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
+#[derive(Debug, StructOpt)]
+#[structopt(name = NAME, about = DESCRIPTION, version = VERSION, author = AUTHOR)]
+pub struct Opt {
+    #[structopt(
+        short,
+        long,
+        default_value = "0u8",
+        help = "Sets the level of verbosity."
+    )]
+    verbose: u8,
+
+    #[structopt(short, long, help = "File containing the key pair.")]
+    keypair: Option<String>,
+
+    #[structopt(
+        short,
+        long,
+        required_if("keypair", ""),
+        help = "Generate a new key pair and write it to <KEYPAIR>."
+    )]
+    generate_key: bool,
+
+    #[structopt(short, long, default_value = DEFAULT_TOPIC, help = "The topic to chat on.")]
+    topic: String,
+
+    #[structopt(short, long, help = "Address of a peer to connect to.")]
+    peers: Option<Vec<String>>,
+}
+
+fn execute_app(matches: Opt) -> Result<(), Box<dyn Error>> {
     // Generate new key pair
     let keypair = key::get_keypair(&matches)?;
 
@@ -44,14 +69,13 @@ fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
     };
 
     // Create a  floodsub topic
-    let topic = matches.value_of(ARG_TOPIC).ok_or("Topic missing?")?;
-    let floodsub_topic = floodsub::Topic::new(topic);
+    let floodsub_topic = floodsub::Topic::new(&matches.topic);
 
     // Create a Swarm to manage peers and events
     let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
 
     // Reach out to another node if specified
-    if let Some(peers) = matches.values_of(ARG_PEER) {
+    if let Some(peers) = &matches.peers {
         for peer in peers {
             let addr: Multiaddr = peer.parse()?;
             Swarm::dial_addr(&mut swarm, addr)?;
@@ -74,7 +98,7 @@ fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
                 Poll::Ready(Some(line)) => {
                     // now that we are connected to peers, subscribe to a topic.
                     if !subscribed && swarm.floodsub.subscribe(floodsub_topic.clone()) {
-                        log::info!("subscribed to: {}", &topic);
+                        log::info!("subscribed to: {}", &matches.topic);
                         subscribed = true;
                     }
                     swarm
@@ -106,52 +130,12 @@ fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let gen_arg_help = format!("Generate a new key pair and write it to <{}>.", ARG_KEYPAIR);
-    let matches = App::new("Püür tö püür Fün")
-        .version(VERSION)
-        .author(AUTHOR)
-        .about(DESCRIPTION)
-        .arg(
-            Arg::with_name(ARG_VERBOSE)
-                .short("v")
-                .help("Sets the level of verbosity.")
-                .multiple(true)
-                .takes_value(false),
-        )
-        .arg(
-            Arg::with_name(ARG_KEYPAIR)
-                .short("k")
-                .help("File containing the key pair.")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name(ARG_GEN)
-                .short("g")
-                .takes_value(false)
-                .help(&gen_arg_help),
-        )
-        .arg(
-            Arg::with_name(ARG_PEER)
-                .short("p")
-                .takes_value(true)
-                .multiple(true)
-                .help("Address of a peer to connect to."),
-        )
-        .arg(
-            Arg::with_name(ARG_TOPIC)
-                .short("t")
-                .help("The topic to chat on.")
-                .takes_value(true)
-                .default_value(DEFAULT_TOPIC),
-        )
-        .get_matches();
+    let opt = Opt::from_args();
 
     // Configure logger
-    stderrlog::new()
-        .verbosity(matches.occurrences_of(ARG_VERBOSE) as usize)
-        .init()?;
+    stderrlog::new().verbosity(opt.verbose as usize).init()?;
 
-    if let Err(box_err) = execute_app(matches) {
+    if let Err(box_err) = execute_app(opt) {
         eprintln!("Application error:\n{}", box_err);
         Err(box_err)
     } else {
