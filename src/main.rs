@@ -33,23 +33,21 @@ fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
 
     // Create PeerID
     let local_peer_id = PeerId::from(keypair.public());
-    log::info!("Own peer ID: {}", local_peer_id);
+    println!("Own peer ID: {}", local_peer_id);
 
     // Create transport protocol
     // TODO: use production transport
     let transport = libp2p::build_development_transport(keypair)?;
 
-    let mut behaviour = chat::Chat {
+    let behaviour = chat::Chat {
         floodsub: Floodsub::new(local_peer_id.clone()),
     };
 
     // Create a  floodsub topic
     let topic = matches.value_of(ARG_TOPIC).ok_or("Topic missing?")?;
     let floodsub_topic = floodsub::Topic::new(topic);
-    log::info!("Topic is: {}", &topic);
 
     // Create a Swarm to manage peers and events
-    behaviour.floodsub.subscribe(floodsub_topic.clone());
     let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
 
     // Reach out to another node if specified
@@ -57,7 +55,7 @@ fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
         for peer in peers {
             let addr: Multiaddr = peer.parse()?;
             Swarm::dial_addr(&mut swarm, addr)?;
-            println!("Dialed {:?}", peer);
+            log::info!("Dialed {:?}", peer);
         }
     }
 
@@ -69,10 +67,16 @@ fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
 
     // Kick it off
     let mut listening = false;
+    let mut subscribed = false;
     task::block_on(future::poll_fn(move |cx: &mut Context| {
         loop {
             match stdin.try_poll_next_unpin(cx)? {
                 Poll::Ready(Some(line)) => {
+                    // now that we are connected to peers, subscribe to a topic.
+                    if !subscribed && swarm.floodsub.subscribe(floodsub_topic.clone()) {
+                        log::info!("subscribed to: {}", &topic);
+                        subscribed = true;
+                    }
                     swarm
                         .floodsub
                         .publish(floodsub_topic.clone(), line.as_bytes());
@@ -89,7 +93,7 @@ fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
                 Poll::Pending => {
                     if !listening {
                         for addr in Swarm::listeners(&swarm) {
-                            log::info!("Listening on {:?}", addr);
+                            println!("Listening on {:?}", addr);
                             listening = true;
                         }
                     }

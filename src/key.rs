@@ -1,10 +1,10 @@
-use libp2p::identity::{ed25519, Keypair};
 use crate::{ARG_GEN, ARG_KEYPAIR};
 use clap::ArgMatches;
+use libp2p::identity::{ed25519, Keypair};
 use std::{
-    io::{Read, Write},
-    fs::File,
     error::Error,
+    fs::File,
+    io::{Read, Write},
 };
 
 pub fn get_keypair(matches: &ArgMatches) -> Result<Keypair, Box<dyn Error>> {
