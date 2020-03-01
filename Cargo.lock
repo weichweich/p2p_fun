@@ -1603,7 +1603,9 @@ checksum = "2839e79665f131bdb5782e51f2c6c9599c133c6098982a54c794358bf432529c"
 name = "p2p_fun"
 version = "0.1.0"
 dependencies = [
+ "async-std",
  "clap",
+ "futures 0.3.4",
  "libp2p",
  "log",
  "stderrlog",

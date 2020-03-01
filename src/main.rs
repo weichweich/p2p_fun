@@ -1,17 +1,19 @@
+use async_std::{io, task};
 use clap::{App, Arg, ArgMatches};
+use futures::prelude::*;
 use libp2p::{
-    floodsub::{self, Floodsub, FloodsubEvent},
-    identity::{ed25519, Keypair},
-    swarm::NetworkBehaviourEventProcess,
-    NetworkBehaviour, PeerId, Swarm,
+    floodsub::{self, Floodsub},
+    Multiaddr, PeerId, Swarm,
 };
 use log;
 use std::{
     error::Error,
-    fs::File,
-    io::{Read, Write},
+    task::{Context, Poll},
 };
 use stderrlog;
+
+mod chat;
+mod key;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHOR: &str = env!("CARGO_PKG_AUTHORS");
@@ -21,79 +23,24 @@ const ARG_VERBOSE: &str = "verbose";
 const ARG_KEYPAIR: &str = "keypair";
 const ARG_GEN: &str = "keygen";
 const ARG_TOPIC: &str = "topic";
+const ARG_PEER: &str = "peer";
 
 const DEFAULT_TOPIC: &str = "chat";
 
-fn get_keypair(matches: &ArgMatches) -> Result<Keypair, Box<dyn Error>> {
-    if matches.occurrences_of(ARG_GEN) > 0 {
-        log::info!("Generate new key pair.");
-        let keypair = ed25519::Keypair::generate();
-
-        // Write to file
-        if let Some(filename) = matches.value_of(ARG_KEYPAIR) {
-            log::info!("Write key to file");
-            let mut file = File::create(filename)?;
-            file.write_all(&keypair.encode()[..])?;
-        }
-
-        Ok(Keypair::Ed25519(keypair))
-    } else if let Some(filename) = matches.value_of(ARG_KEYPAIR) {
-        log::info!("Load key pair.");
-        let mut keydata = Vec::new();
-        let mut file = File::open(filename)?;
-        file.read_to_end(&mut keydata)?;
-
-        Ok(Keypair::Ed25519(ed25519::Keypair::decode(
-            &mut keydata[..],
-        )?))
-    } else {
-        let err_msg = format!(
-            "Argument <{}> is required if <{}> is not set.",
-            ARG_KEYPAIR, ARG_GEN
-        );
-        log::error!("{}", err_msg);
-
-        Err(err_msg.into())
-    }
-}
-
-#[derive(NetworkBehaviour)]
-struct Chat {
-    floodsub: Floodsub,
-
-    // Struct fields which do not implement NetworkBehaviour need to be ignored
-    #[behaviour(ignore)]
-    #[allow(dead_code)]
-    ignored_member: bool,
-}
-
-impl NetworkBehaviourEventProcess<FloodsubEvent> for Chat {
-    // Called when `floodsub` produces an event.
-    fn inject_event(&mut self, message: FloodsubEvent) {
-        if let FloodsubEvent::Message(message) = message {
-            println!(
-                "Received: '{:?}' from {:?}",
-                String::from_utf8_lossy(&message.data),
-                message.source
-            );
-        }
-    }
-}
-
 fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
     // Generate new key pair
-    let keypair = get_keypair(&matches)?;
+    let keypair = key::get_keypair(&matches)?;
 
     // Create PeerID
     let local_peer_id = PeerId::from(keypair.public());
+    log::info!("Own peer ID: {}", local_peer_id);
 
     // Create transport protocol
     // TODO: use production transport
     let transport = libp2p::build_development_transport(keypair)?;
 
-    let mut behaviour = Chat {
+    let mut behaviour = chat::Chat {
         floodsub: Floodsub::new(local_peer_id.clone()),
-        ignored_member: false,
     };
 
     // Create a  floodsub topic
@@ -102,17 +49,61 @@ fn execute_app(matches: ArgMatches) -> Result<(), Box<dyn Error>> {
     log::info!("Topic is: {}", &topic);
 
     // Create a Swarm to manage peers and events
-    behaviour.floodsub.subscribe(floodsub_topic);
-    let mut _swarm = Swarm::new(transport, behaviour, local_peer_id);
-    Ok(())
+    behaviour.floodsub.subscribe(floodsub_topic.clone());
+    let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
+
+    // Reach out to another node if specified
+    if let Some(peers) = matches.values_of(ARG_PEER) {
+        for peer in peers {
+            let addr: Multiaddr = peer.parse()?;
+            Swarm::dial_addr(&mut swarm, addr)?;
+            println!("Dialed {:?}", peer);
+        }
+    }
+
+    // Listen on all interfaces and whatever port the OS assigns
+    Swarm::listen_on(&mut swarm, "/ip6/::/tcp/0".parse()?)?;
+
+    // Read full lines from stdin
+    let mut stdin = io::BufReader::new(io::stdin()).lines();
+
+    // Kick it off
+    let mut listening = false;
+    task::block_on(future::poll_fn(move |cx: &mut Context| {
+        loop {
+            match stdin.try_poll_next_unpin(cx)? {
+                Poll::Ready(Some(line)) => {
+                    swarm
+                        .floodsub
+                        .publish(floodsub_topic.clone(), line.as_bytes());
+                    log::info!("sent");
+                }
+                Poll::Ready(None) => panic!("Stdin closed"),
+                Poll::Pending => break,
+            }
+        }
+        loop {
+            match swarm.poll_next_unpin(cx) {
+                Poll::Ready(Some(event)) => log::info!("New Event: {:?}", event),
+                Poll::Ready(None) => return Poll::Ready(Ok(())),
+                Poll::Pending => {
+                    if !listening {
+                        for addr in Swarm::listeners(&swarm) {
+                            log::info!("Listening on {:?}", addr);
+                            listening = true;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        Poll::Pending
+    }))
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let gen_arg_help = format!(
-        "Generate a new key pair and write it to <{}>.",
-        ARG_KEYPAIR
-    );
-    let app = App::new("Püür tö püür Fün")
+    let gen_arg_help = format!("Generate a new key pair and write it to <{}>.", ARG_KEYPAIR);
+    let matches = App::new("Püür tö püür Fün")
         .version(VERSION)
         .author(AUTHOR)
         .about(DESCRIPTION)
@@ -136,13 +127,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .help(&gen_arg_help),
         )
         .arg(
+            Arg::with_name(ARG_PEER)
+                .short("p")
+                .takes_value(true)
+                .multiple(true)
+                .help("Address of a peer to connect to."),
+        )
+        .arg(
             Arg::with_name(ARG_TOPIC)
                 .short("t")
                 .help("The topic to chat on.")
                 .takes_value(true)
                 .default_value(DEFAULT_TOPIC),
-        );
-    let matches = app.get_matches();
+        )
+        .get_matches();
 
     // Configure logger
     stderrlog::new()
