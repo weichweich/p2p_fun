@@ -17,19 +17,16 @@ mod chat;
 mod key;
 
 const NAME: &str = env!("CARGO_PKG_NAME");
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const AUTHOR: &str = env!("CARGO_PKG_AUTHORS");
-const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 
 const DEFAULT_TOPIC: &str = "chat";
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = NAME, about = DESCRIPTION, version = VERSION, author = AUTHOR)]
+#[structopt(name = NAME)]
 pub struct Opt {
     #[structopt(
         short,
         long,
-        default_value = "0u8",
+        parse(from_occurrences),
         help = "Sets the level of verbosity."
     )]
     verbose: u8,
