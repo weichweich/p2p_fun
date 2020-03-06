@@ -15,4 +15,4 @@ stderrlog = "0.4"
 log = "0.4"
 async-std = "1.0"
 futures = "0.3"
-
+void = "*"

@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 use async_std::{io, task};
+use chat::AutoSubscribe;
 use futures::prelude::*;
 use libp2p::{
     floodsub::{self, Floodsub},
@@ -63,6 +64,7 @@ fn execute_app(matches: Opt) -> Result<(), Box<dyn Error>> {
 
     let behaviour = chat::Chat {
         floodsub: Floodsub::new(local_peer_id.clone()),
+        auto_subscribe: AutoSubscribe {},
     };
 
     // Create a  floodsub topic

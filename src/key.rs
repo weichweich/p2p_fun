@@ -29,7 +29,7 @@ pub fn get_keypair(matches: &Opt) -> Result<Keypair, Box<dyn Error>> {
             &mut keydata[..],
         )?))
     } else {
-        let err_msg = "Argument <KEYPAIR> is required if <generate_key> is not set.";
+        let err_msg = "Argument <keypair> is required if <generate_key> is not set.";
         log::error!("{}", err_msg);
 
         Err(err_msg.into())
