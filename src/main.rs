@@ -1,13 +1,15 @@
 #![deny(unsafe_code)]
 use async_std::{io, task};
 use futures::prelude::*;
+use libp2p::Transport;
 use libp2p::{
+    core, dns,
     floodsub::{self, Floodsub},
-    Multiaddr, PeerId, Swarm,
+    identity, mplex, secio, tcp, yamux, Multiaddr, PeerId, Swarm,
 };
 use log;
 use std::{
-    error::Error,
+    error::{self, Error},
     task::{Context, Poll},
 };
 use stderrlog;
@@ -49,6 +51,40 @@ pub struct Opt {
     peers: Option<Vec<String>>,
 }
 
+fn build_transport(
+    keypair: identity::Keypair,
+) -> Result<
+    impl Transport<
+            Output = (
+                PeerId,
+                impl core::muxing::StreamMuxer<
+                        OutboundSubstream = impl Send,
+                        Substream = impl Send,
+                        Error = impl Into<io::Error>,
+                    > + Send
+                    + Sync,
+            ),
+            Error = impl error::Error + Send,
+            Listener = impl Send,
+            Dial = impl Send,
+            ListenerUpgrade = impl Send,
+        > + Clone,
+    Box<dyn Error>,
+> {
+    let tcp_cfg = tcp::TcpConfig::new();
+    let dns_cfg = dns::DnsConfig::new(tcp_cfg)?;
+
+    let transport = dns_cfg
+        .upgrade(core::upgrade::Version::V1)
+        .authenticate(secio::SecioConfig::new(keypair))
+        .multiplex(core::upgrade::SelectUpgrade::new(
+            yamux::Config::default(),
+            mplex::MplexConfig::new(),
+        ))
+        .map(|(peer, muxer), _| (peer, core::muxing::StreamMuxerBox::new(muxer)));
+    Ok(transport)
+}
+
 fn execute_app(matches: Opt) -> Result<(), Box<dyn Error>> {
     // Generate new key pair
     let keypair = key::get_keypair(&matches)?;
@@ -59,8 +95,7 @@ fn execute_app(matches: Opt) -> Result<(), Box<dyn Error>> {
 
     // Create transport protocol
     // TODO: use production transport
-    let transport = libp2p::build_development_transport(keypair)?;
-
+    let transport = build_transport(keypair)?;
     let behaviour = chat::Chat {
         floodsub: Floodsub::new(local_peer_id.clone()),
     };
