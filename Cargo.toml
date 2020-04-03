@@ -7,12 +7,10 @@ repository = "https://github.com/weichweich/p2p_fun"
 categories = ["command-line-utilities"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-libp2p = "0.16"
+libp2p = { path = "../rust-libp2p" }
 structopt = "0.3"
 stderrlog = "0.4"
 log = "0.4"
 async-std = "1.0"
 futures = "0.3"
-

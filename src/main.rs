@@ -5,12 +5,12 @@ use libp2p::Transport;
 use libp2p::{
     core, dns,
     floodsub::{self, Floodsub},
-    identity, mplex, secio, tcp, yamux, Multiaddr, PeerId, Swarm,
+    identity, kad, mplex, secio, tcp, yamux, Multiaddr, PeerId, Swarm,
 };
 use log;
 use std::{
     error::{self, Error},
-    task::{Context, Poll},
+    task::{Context, Poll}, str::FromStr,
 };
 use stderrlog;
 use structopt::StructOpt;
@@ -85,35 +85,63 @@ fn build_transport(
     Ok(transport)
 }
 
+fn without_first(string: &str) -> &str {
+    string
+        .char_indices()
+        .nth(1)
+        .and_then(|(i, _)| string.get(i..))
+        .unwrap_or("")
+}
+
+fn parse_address(raw_address: &str) -> Result<(Multiaddr, PeerId), Box<dyn Error>> {
+    // find index of last '/' which should separate the multiaddress from the PeerID
+    let split_i = raw_address.rfind("/").ok_or("Invalid address")?;
+    // split the multiaddress from the PeerID
+    let (raw_addr, raw_id_padded) = raw_address.split_at(split_i);
+    let raw_id = without_first(raw_id_padded);
+
+    // parse multiaddress and PeerID
+    let addr: Multiaddr = raw_addr.parse()?;
+    let peer_id = PeerId::from_str(raw_id)?;
+
+    Ok((addr, peer_id))
+}
+
 fn execute_app(matches: Opt) -> Result<(), Box<dyn Error>> {
     // Generate new key pair
     let keypair = key::get_keypair(&matches)?;
 
     // Create PeerID
     let local_peer_id = PeerId::from(keypair.public());
-    println!("Own peer ID: {}", local_peer_id);
+    println!("Own peer ID: {}", local_peer_id.to_base58());
 
     // Create transport protocol
-    // TODO: use production transport
     let transport = build_transport(keypair)?;
-    let behaviour = chat::Chat {
+
+    // Create behaviors
+    let kad_cfg = kad::KademliaConfig::default();
+    let kad_store = kad::record::store::MemoryStore::new(local_peer_id.clone());
+    let kad = kad::Kademlia::with_config(local_peer_id.clone(), kad_store, kad_cfg);
+    let mut behaviour = chat::Chat {
         floodsub: Floodsub::new(local_peer_id.clone()),
+        kad,
     };
 
     // Create a  floodsub topic
     let floodsub_topic = floodsub::Topic::new(&matches.topic);
 
-    // Create a Swarm to manage peers and events
-    let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
-
     // Reach out to another node if specified
     if let Some(peers) = &matches.peers {
         for peer in peers {
-            let addr: Multiaddr = peer.parse()?;
-            Swarm::dial_addr(&mut swarm, addr)?;
-            log::info!("Dialed {:?}", peer);
+            let (addr, peer_id) = parse_address(peer)?;
+            behaviour.kad.add_address(&peer_id, addr);
         }
     }
+
+    behaviour.kad.bootstrap();
+
+    // Create a Swarm to manage peers and events
+    let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
 
     // Listen on all interfaces and whatever port the OS assigns
     Swarm::listen_on(&mut swarm, "/ip6/::/tcp/0".parse()?)?;
@@ -122,6 +150,7 @@ fn execute_app(matches: Opt) -> Result<(), Box<dyn Error>> {
     let mut stdin = io::BufReader::new(io::stdin()).lines();
 
     // Kick it off
+    // TODO: use async_std and await syntax
     let mut listening = false;
     let mut subscribed = false;
     task::block_on(future::poll_fn(move |cx: &mut Context| {
