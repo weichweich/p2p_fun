@@ -10,13 +10,14 @@ use libp2p::{
 use log;
 use std::{
     error::{self, Error},
-    task::{Context, Poll}, str::FromStr,
+    str::FromStr,
+    task::{Context, Poll},
 };
 use stderrlog;
 use structopt::StructOpt;
 
-mod registry;
 mod key;
+mod registry;
 
 const NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -136,9 +137,11 @@ fn execute_app(matches: Opt) -> Result<(), Box<dyn Error>> {
             let (addr, peer_id) = parse_address(peer)?;
             behaviour.kad.add_address(&peer_id, addr);
         }
+        // we only bootstrap if there are peers. Without peers, we cannot bootstrap.
+        if peers.len() > 0 {
+            behaviour.kad.bootstrap()?;
+        }
     }
-
-    behaviour.kad.bootstrap();
 
     // Create a Swarm to manage peers and events
     let mut swarm = Swarm::new(transport, behaviour, local_peer_id);

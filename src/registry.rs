@@ -51,7 +51,15 @@ impl<TStore> NetworkBehaviourEventProcess<KademliaEvent> for Registry<TStore> {
                 log::info!("Connected to: {:?} ({})", addresses, peer_id);
                 log::info!("Adding to pub sub");
                 self.floodsub.add_node_to_partial_view(peer_id);
+            }
+            KademliaEvent::UnroutablePeer { peer } => log::warn!("Unroutable peer! {}", peer),
+            KademliaEvent::QueryResult {
+                result: QueryResult::Bootstrap(Ok(result)),
+                ..
+            } => {
                 log::info!("Bootstrap was successful: {}", result.peer);
+            }
+            other => log::trace!("Unhandled kademlia event: {:?}", other),
         }
     }
 }
