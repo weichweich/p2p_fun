@@ -15,7 +15,7 @@ use std::{
 use stderrlog;
 use structopt::StructOpt;
 
-mod chat;
+mod registry;
 mod key;
 
 const NAME: &str = env!("CARGO_PKG_NAME");
@@ -122,7 +122,7 @@ fn execute_app(matches: Opt) -> Result<(), Box<dyn Error>> {
     let kad_cfg = kad::KademliaConfig::default();
     let kad_store = kad::record::store::MemoryStore::new(local_peer_id.clone());
     let kad = kad::Kademlia::with_config(local_peer_id.clone(), kad_store, kad_cfg);
-    let mut behaviour = chat::Chat {
+    let mut behaviour = registry::Registry {
         floodsub: Floodsub::new(local_peer_id.clone()),
         kad,
     };
